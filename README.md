@@ -1,4 +1,4 @@
-# Gratia E-Commerce Client Application (Frontend)
+# Gratia E-Commerce Frontend (Client)
 
 [![React](https://img.shields.io/badge/React-v19.1.0-61DAFB.svg)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-v7.0.4-646CFF.svg)](https://vitejs.dev/)
@@ -7,290 +7,244 @@
 [![Material UI](https://img.shields.io/badge/MUI-v7.2.0-007FFF.svg)](https://mui.com/)
 [![License](https://img.shields.io/badge/License-ISC-blue.svg)]()
 
-> A high-performance, responsive Single Page Application (SPA) powering both consumer-facing storefronts and an enterprise administrative operations center. Built with **React 19**, **Vite 7**, and **Tailwind CSS v4**, featuring normalized server-state caching via **RTK Query**, transparent **401 Axios token rotation interceptors**, **Fuzzy URL category routing**, **real-time WebSocket state synchronization**, **failed payment retry pipelines**, and **Recharts analytics dashboards**.
+> Frontend Single Page Application (SPA) for the **Gratia** e-commerce platform, including both the customer storefront and the admin dashboard. Built with **React 19**, **Vite 7**, **Tailwind CSS v4**, and **Material UI**, using **Redux Toolkit & RTK Query** for state management and API caching, **Axios interceptors** for automatic token refresh, **Socket.io** for real-time forced logout, and **Recharts** for admin analytics. Hosted on **AWS Amplify**.
 
 ---
 
-## Architecture Blueprint
+## Architecture Overview
 
-The client architecture is decoupled into distinct presentation, state, and transport tiers:
+The frontend is organized into reusable UI components, protected routes, Redux/RTK Query state management, and Axios/Socket.io network layers:
 
 ```mermaid
 flowchart TD
-    subgraph UI ["Presentation & UI Layer"]
-        Storefront["Storefront Views (Catalog, Detail, Cart, Wallet, Profile)"]
-        AdminPortal["Admin Console (Analytics Dashboard, Inventory, Orders, Offers)"]
-        ChatBot["Framer-Motion Floating AI Shopping Assistant"]
-        SharedUI["Atomic UI Components (MUI v7, Tailwind v4, Lucide Icons)"]
+    subgraph UI ["Pages & Components"]
+        Storefront["Customer Storefront (Home, Catalog, Product Details, Cart, Checkout, Wallet)"]
+        AdminPanel["Admin Dashboard (Analytics, Products, Categories, Orders, Offers, Coupons)"]
+        ChatBot["AI Shopping Assistant Widget (Framer Motion + React Markdown)"]
+        SharedUI["UI Components (MUI v7, Tailwind CSS v4, Swiper)"]
     end
 
-    subgraph Guards ["Navigation & Route Guards (React Router v7)"]
-        RouteVal["RouteValidation (Fuzzy Match URL Auto-Correction)"]
-        UserGuard["UserProtected & UserSessionCheck Guards"]
-        AdminGuard["AdminProtected & AdminSessionCheck Guards"]
+    subgraph Routing ["Routing & Route Protection (React Router v7)"]
+        RouteVal["RouteValidation (Category URL Typo Auto-Correction)"]
+        UserGuard["UserProtected & UserSessionCheck"]
+        AdminGuard["AdminProtected & AdminSessionCheck"]
     end
 
-    subgraph State ["Client & Server State Tier"]
+    subgraph State ["State Management & API Caching"]
         ReduxStore["Redux Toolkit Store"]
-        PersistGate["Redux-Persist (Active Order & Checkout Sessions)"]
-        RTKQueryUser["RTK Query userApi (Automated Tag Cache Invalidation)"]
-        RTKQueryAdmin["RTK Query adminApi (Analytics & Catalog Cache)"]
-        AuthSlices["Auth Slices (User & Admin Authentication State)"]
+        Persist["Redux-Persist (Persists Active Checkout State)"]
+        RTKUser["RTK Query userApi (Tag-Based Cache Invalidation)"]
+        RTKAdmin["RTK Query adminApi (Admin Data & Reports Cache)"]
+        Slices["Redux Slices (Auth, Cart, Order, UI Filters)"]
     end
 
-    subgraph Transport ["Network & Real-Time Transport"]
-        AxiosUser["User Axios Instance (Silent 401 Refresh Interceptor)"]
-        AxiosAdmin["Admin Axios Instance (Silent 401 Refresh Interceptor)"]
-        SocketClient["Socket.io WebSocket Client (Force-Logout & Presence)"]
+    subgraph Network ["API & Real-Time Connections"]
+        AxiosUser["User Axios Instance (401 Token Refresh Interceptor)"]
+        AxiosAdmin["Admin Axios Instance (401 Token Refresh Interceptor)"]
+        SocketClient["Socket.io Client (Real-Time Force Logout)"]
     end
 
-    subgraph Gateways ["External Payment & Service SDKs"]
-        RazorpaySDK["Razorpay Checkout JS"]
-        PayPalSDK["PayPal React SDK (@paypal/react-paypal-js)"]
+    subgraph Payments ["Payment SDKs"]
+        RazorpaySDK["Razorpay Checkout"]
+        PayPalSDK["PayPal React SDK"]
     end
 
     Storefront --> SharedUI
-    AdminPortal --> SharedUI
+    AdminPanel --> SharedUI
     Storefront --> RouteVal
     RouteVal --> UserGuard
-    AdminPortal --> AdminGuard
+    AdminPanel --> AdminGuard
     UserGuard --> ReduxStore
     AdminGuard --> ReduxStore
-    ReduxStore <--> PersistGate
-    ReduxStore --> AuthSlices
-    ReduxStore --> RTKQueryUser
-    ReduxStore --> RTKQueryAdmin
-    RTKQueryUser --> AxiosUser
-    RTKQueryAdmin --> AxiosAdmin
-    SocketClient <-->|"WSS Events"| ReduxStore
+    ReduxStore <--> Persist
+    ReduxStore --> Slices
+    ReduxStore --> RTKUser
+    ReduxStore --> RTKAdmin
+    RTKUser --> AxiosUser
+    RTKAdmin --> AxiosAdmin
+    SocketClient <--> ReduxStore
     Storefront --> RazorpaySDK
     Storefront --> PayPalSDK
 ```
 
 ---
 
-## Core Engineering Highlights
+## Key Features & Implementation Details
 
-### 1. Hybrid State Management & Tag-Based Cache Invalidation
-The application maintains a strict boundary between ephemeral client UI state and server-side cached state:
-- **RTK Query Cache Normalization**: Both [`userBaseApi`](src/Store/Api/setup/userBaseApi.js) and [`AdminBaseApi`](src/Store/Api/setup/AdminBaseApi.js) utilize declarative cache tagging (`Auth`, `Orders`, `Product`, `Variants`, `Category`, `Coupons`, `Report`, etc.). 
-- **Zero-Latency Invalidation**: Administrative operations (e.g., updating SKU variant pricing or changing order statuses) automatically invalidate dependent tag keys, guaranteeing immediate UI reconciliation across all active subscribers without manual refetching.
-- **Session Persistence**: Checkout pipelines and multi-step transaction drafts are wrapped in `redux-persist` (`order-v2`), protecting consumer inputs across network drops and browser reloads.
-
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Admin
-    participant AdminUI as Admin Dashboard
-    participant RTK as RTK Query Cache
-    participant Server as Backend API
-
-    Admin->>AdminUI: Updates Product Variant Price
-    AdminUI->>Server: PATCH /api/admin/product/variant/:id
-    Server-->>AdminUI: HTTP 200 OK (Updated)
-    Note over RTK: RTK Query invalidates tags: ["Variants", "ProductById", "Report"]
-    RTK->>Server: Automatic background refetch for active queries
-    Server-->>RTK: Fresh catalog payload
-    RTK-->>AdminUI: Re-renders UI with updated pricing instantly
-```
+### 1. State Management & RTK Query Tag Invalidation
+- **RTK Query API Caching**: Separate API slices for customer ([`userBaseApi.js`](src/Store/Api/setup/userBaseApi.js)) and admin ([`AdminBaseApi.js`](src/Store/Api/setup/AdminBaseApi.js)) manage data fetching, loading states, and cache invalidation using tags (`Auth`, `Orders`, `Product`, `Variants`, `Category`, `Coupons`, `Report`, etc.).
+- **Automatic UI Updates**: When an admin updates a product variant or changes an order status, RTK Query invalidates the related tags and automatically refetches fresh data without needing manual page reloads.
+- **Persistent Checkout State**: Uses `redux-persist` on the order slice so checkout items and selected coupons are not lost if the user refreshes the page.
 
 ---
 
-### 2. Transparent Token Refresh via Axios Interceptors
-Authentication security utilizes `HttpOnly` cookie-based JWT tokens. To guarantee an uninterrupted customer experience when the short-lived access token expires:
-- **401 Interception**: The Axios response interceptor intercepts any `401 Unauthorized` response on protected endpoints.
-- **Silent Token Rotation**: Pauses the failing request, tags it with `_retry = true`, and dispatches an asynchronous call to `/api/user/refresh` (or `/api/admin/refresh`).
-- **Idempotent Replay**: Upon successful token rotation, the interceptor re-executes the original request with the fresh credential cookies, rendering session expiration invisible to the user.
+### 2. Automatic JWT Refresh via Axios Interceptors
+Authentication uses short-lived JWT access tokens and 30-day refresh tokens stored in `HttpOnly` cookies:
+- When an access token expires and an API call returns `401 Unauthorized`, the Axios response interceptor ([`userInstance.js`](src/Store/Api/setup/Instances/userInstance.js)) catches the error and sets `originalRequest._retry = true`.
+- It automatically calls `/api/user/refresh` (or `/api/admin/refresh`) to get a new access token cookie and retries the original failed request in the background without logging the user out.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant UI as React Component
     participant Axios as Axios Interceptor
-    participant API as Backend Server
+    participant API as Backend API
 
-    UI->>Axios: Dispatches GET /api/user/orders
+    UI->>Axios: Request protected data (e.g., GET /api/user/orders)
     Axios->>API: GET /api/user/orders (Expired Access Cookie)
     API-->>Axios: 401 Unauthorized
-    Note over Axios: Interceptor catches 401, sets _retry = true
-    Axios->>API: GET /api/user/refresh (With Refresh Cookie)
-    API-->>Axios: 200 OK (Sets fresh Access Cookie)
-    Axios->>API: Re-executes original GET /api/user/orders
-    API-->>Axios: 200 OK (Orders Payload)
-    Axios-->>UI: Resolves data seamlessly
+    Note over Axios: Catches 401 & sets _retry = true
+    Axios->>API: GET /api/user/refresh (Sends Refresh Cookie)
+    API-->>Axios: 200 OK (Sets new Access Cookie)
+    Axios->>API: Retries GET /api/user/orders
+    API-->>Axios: 200 OK (Orders Data)
+    Axios-->>UI: Returns data seamlessly
 ```
 
 ---
 
-### 3. Intelligent URL Routing & Algorithmic Fuzzy Auto-Correction
-Deep-linked hierarchical category URLs (`/:category/:subCategory/:thirdCategory`) are protected by [`RouteValidation.jsx`](src/Components/Protected/RouteValidation.jsx):
-- **Algorithmic String Similarity**: Employs the **Sørensen–Dice coefficient algorithm** (`string-similarity`) to compare user-typed URL slugs against available database categories.
-- **Auto-Correction Redirect**: If a user enters a slightly misspelled route (e.g. `/electrnics/lap-tops`), the component calculates match confidence using the Sørensen–Dice index (`Similarity = (2 * |S1 ∩ S2|) / (|S1| + |S2|) > 0.4`).
-- **Canonical Routing**: Automatically updates the browser location via `navigate(..., { replace: true })` to the canonical URL slug, preserving SEO equity and mitigating 404 dead-ends.
+### 3. Category URL Validation & Typo Auto-Correction
+Category routes (`/:category/:subCategory?/:thirdCategory?`) are wrapped in [`RouteValidation.jsx`](src/Components/Protected/RouteValidation.jsx):
+- Uses the `string-similarity` package (`findBestMatch`) to compare URL parameters against existing category names from the database.
+- If a user types a minor typo in the URL (e.g., `/fashon` instead of `/fashion`) and the similarity score is above `0.4`, the app automatically redirects (`navigate(..., { replace: true })`) to the matching category URL instead of showing a 404 page.
 
 ---
 
-### 4. Unauthenticated-to-Authenticated Cart Synchronization
-To maximize e-commerce conversion, guests can browse and add items to a persistent cart stored locally in browser `localStorage`:
-- **Login Ingestion**: Upon successful authentication, [`App.jsx`](src/App.jsx) detects cached local items via `localStorage.getItem("cart")`.
-- **Atomic Bulk Ingestion**: Dispatches `useAddToCartMutation` to bulk-upload guest items to the backend MongoDB cart collection.
-- **Cache Eviction**: Automatically unlinks local storage entries, establishing the database as the unified source of truth.
+### 4. Guest Cart to User Cart Sync
+- Guests who are not logged in can add items to their cart, which is saved in `localStorage`.
+- As soon as the user logs in, [`App.jsx`](src/App.jsx) reads the items from `localStorage.getItem("cart")`, sends them to the backend cart endpoint via `useAddToCartMutation`, and clears the local storage cart so their items are merged into their account.
 
 ---
 
-### 5. Real-Time Socket.io Security Gateway & Instant Force-Logout
-- **Session Registration**: On application boot, active authenticated users emit `registerUser` with their `userId` to the WebSocket gateway.
-- **Administrative Ejection**: The client listens for the `forceLogout` event. If an administrator flags or blocks a user, the application instantly:
-  1. Purges the Redux authentication slice (`clearUser()`).
-  2. Executes the server-side logout mutation.
-  3. Displays a security alert via `react-hot-toast`.
-  4. Bounces the client to `/login` without waiting for token expiration.
+### 5. Real-Time Forced Logout (Socket.io)
+- When a user logs in, [`App.jsx`](src/App.jsx) emits `registerUser` with their `userId` to the Socket.io server.
+- The app listens for the `forceLogout` socket event. If an admin blocks the user from the Admin Dashboard, the frontend immediately clears the Redux user state, triggers the logout API, and shows a toast notification (`"You have been blocked by admin"`).
 
 ---
 
-### 6. Resilient Payment Orchestration & Checkout Recovery
-The checkout subsystem supports multiple payment rails with a dedicated **Failed Transaction Recovery Engine**:
-- **Multi-Rail Checkout**:
-  - **Razorpay**: Direct checkout script integration with programmatic callback handling and signature forwarding.
-  - **PayPal**: Native `@paypal/react-paypal-js` button integration with order creation and capture flows.
-  - **Digital Wallet**: Real-time balance check and single-click checkout with automated ledger debit.
-  - **Cash on Delivery (COD)**: Address validation and instant order generation.
-- **Idempotent Retry Flow (`/checkout/retry/:id`)**:
-  - When an online payment fails or times out, the backend persists the order in a `Failed` state.
-  - The client loads [`CheckoutRetry.jsx`](src/Pages/User/CheckoutRetry.jsx), hydrating the exact order state (items, discounts, applied coupon, and address).
-  - The customer can re-attempt the transaction across alternative payment methods without repeating product selection.
+### 6. Multiple Payment Options & Failed Payment Retry
+- **Supported Payment Methods**:
+  - **Razorpay**: Opens the Razorpay checkout modal and sends payment signatures to the backend for verification.
+  - **PayPal**: Uses `@paypal/react-paypal-js` for PayPal checkout.
+  - **In-App Wallet**: Allows paying directly using available wallet balance.
+  - **Cash on Delivery (COD)**: Places the order directly with address validation.
+- **Retry Failed Payments (`/checkout/retry/:id`)**:
+  - If an online payment fails or is closed mid-checkout, the order is saved with status `"Failed"`.
+  - Users can visit [`CheckoutRetry.jsx`](src/Pages/User/CheckoutRetry.jsx) from their Orders page to retry paying for that exact order using any payment method.
 
 ---
 
-### 7. Interactive Administrative Analytics Dashboard
-The administrative operations center ([`Dashboard.jsx`](src/Pages/Admin/Dashboard.jsx)) provides real-time business telemetry:
-- **Composable Data Visualizations**: Built with **Recharts**:
-  - `SalesLineGraph`: Multi-point revenue and sales volume trends.
-  - `OrderStatusChart`: Donut/Pie distribution of order lifecycle stages.
-  - `BarGraph`: Comparative performance across dates.
-- **Time-Series Filtering**: Filter by daily, weekly, monthly, yearly, or custom date ranges using **MUI X-Date-Pickers**.
-- **Top 10 Metrics**: Live ranking widgets for top-selling products, categories, and brands.
-- **Direct Streaming Export Triggers**: One-click download triggers for server-generated PDF and Excel workbooks with zero client-side calculation overhead.
+### 7. Admin Analytics Dashboard & Report Downloads
+The Admin Dashboard ([`Dashboard.jsx`](src/Pages/Admin/Dashboard.jsx)) provides sales and order insights:
+- **Charts (Recharts)**: Line chart for revenue/sales trends, pie chart for order status breakdown, and bar charts.
+- **Date Filtering**: Filter dashboard stats and sales reports by daily, weekly, monthly, yearly, or custom date ranges using **MUI Date Pickers**.
+- **Top 10 Lists**: Displays top-selling products, categories, and brands.
+- **Excel & PDF Exports**: One-click buttons to download filtered sales reports in `.xlsx` or `.pdf` format.
 
 ---
 
-### 8. Client-Side Canvas Image Processing & Media Tools
-- **Aspect-Ratio Image Cropping** ([`ImageCropper.jsx`](src/Components/Admin/ImageCropper.jsx)): Incorporates `react-easy-crop` and an HTML5 Canvas pipeline (`getCroppedImg`) to crop, scale, and compress images directly in browser memory before dispatching to Cloudinary.
-- **Interactive Product Inspection**: High-resolution zoom inspection (`react-inner-image-zoom`) combined with `Swiper` touch carousels for multi-variant thumbnail galleries.
+### 8. Client-Side Image Cropping & Product Zoom
+- **Image Cropper** ([`ImageCropper.jsx`](src/Components/Admin/ImageCropper.jsx)): Admins can crop and resize product and banner images in the browser using `react-easy-crop` and HTML5 Canvas ([`getCroppedImg.js`](src/Utils/getCroppedImg.js)) before uploading to Cloudinary.
+- **Product Image Zoom**: Product detail pages include high-resolution hover zoom (`react-inner-image-zoom`) and `Swiper` image sliders.
 
 ---
 
-### 9. Contextual AI Shopping Assistant
-- **Floating Widget** ([`ChatBox.jsx`](src/Components/User/ChatBox.jsx)): Smooth entry/exit physics using **Framer Motion**, animated typing indicators, and auto-scrolling message streams.
-- **RAG-Grounded Queries**: Connects to the backend AI assistant to answer natural language product, stock, and pricing queries in real time.
+### 9. Floating AI Shopping Assistant
+- Built with **Framer Motion** for smooth open/close animations ([`ChatBox.jsx`](src/Components/User/ChatBox.jsx)) and **React Markdown** (`react-markdown`) to properly format bold product names, bullet points, and pricing returned by the backend Gemini AI service.
 
 ---
 
-## Directory & Module Anatomy
+## Project Structure
 
-```
+```text
 Frontend/src/
-├── Assets/                      # Static branding, placeholders & SVG icons
-├── Components/                  # Reusable UI component modules
-│   ├── Admin/                   # Administrative interface components
-│   │   ├── AdminLayout.jsx      # Navigation shell & collapsible sidebar
-│   │   ├── DashBoxes.jsx        # Telemetry KPI metric cards
-│   │   ├── ImageCropper.jsx     # Canvas-based client-side image cropping
-│   │   ├── LineGraph.jsx        # Recharts trend visualization
-│   │   ├── OrderStatusModal.jsx # Lifecycle status transition modal
-│   │   ├── PiChart.jsx          # Order status distribution pie chart
-│   │   ├── ProductTable.jsx     # Paginated SKU & inventory grid
-│   │   └── SalesLineGraph.jsx   # Revenue analytics graph
-│   ├── Protected/               # Routing guards & access control
-│   │   ├── AdminProtected.jsx   # Admin authentication gate
-│   │   ├── AdminSessionCheck.jsx# Login session redirection
-│   │   ├── RouteValidation.jsx  # Fuzzy match category validator
-│   │   ├── UserProtected.jsx    # Consumer authentication gate
-│   │   └── UserSesssionChech.jsx# Guest session redirection
-│   └── User/                    # Consumer storefront components
-│       ├── ChatBox.jsx          # AI shopping assistant floating widget
-│       ├── Header.jsx           # Dynamic navigation header & cart badge
-│       ├── PaypalButton.jsx     # PayPal SDK button integration
-│       ├── ProductCard.jsx      # SKU catalog display card
-│       ├── ProductZoom.jsx      # High-res image inspection zoom
-│       ├── Razorpay.jsx         # Razorpay checkout script trigger
-│       ├── Search.jsx           # Debounced search bar with auto-suggestions
-│       └── SelectCouponModal.jsx# Coupon selector modal
-├── Error/                       # Error boundaries & fallback views
-│   └── ErrorBoundary.jsx        # React class-based error boundary
-├── Layout/                      # Shared page templates
-│   └── MyAccountLayout.jsx      # Consumer account dashboard shell
-├── Pages/                       # Top-level route views
-│   ├── Admin/                   # Admin pages (Dashboard, Products, Orders, Offers)
-│   └── User/                    # Storefront pages (Home, Catalog, Checkout, Wallet)
-├── Routes/                      # Sub-router declarations
-│   ├── Admin.route.jsx          # Admin routes & nested layout mappings
-│   └── User.route.jsx           # Storefront consumer route tree
-├── Store/                       # State management architecture
-│   ├── Api/                     # RTK Query service definitions
-│   │   ├── admin/               # Admin endpoints (Products, Orders, Reports)
-│   │   ├── setup/               # Base queries & Axios instances
-│   │   │   ├── Instances/       # Axios instances with 401 retry interceptors
-│   │   │   ├── AdminBaseApi.js  # Admin RTK Query root with tag definitions
-│   │   │   ├── axiosBase.js     # Custom Axios base query adapter
-│   │   │   └── userBaseApi.js   # User RTK Query root with tag definitions
-│   │   └── user/                # User endpoints (Auth, Cart, Orders, Wallet)
-│   ├── StoreSlices/             # Pure Redux state slices
-│   │   ├── adminAuthSlice.js    # Admin session state
-│   │   ├── cartSlice.js         # Client-side cart operations
-│   │   ├── orderSlice.js        # Checkout items, active coupons & pricing
-│   │   ├── uiSlice.js           # Modal visibility & catalog filter parameters
-│   │   └── userAuthSlice.js     # User session state
+├── Assets/                      # Static images, icons & placeholders
+├── Components/                  # Reusable UI components
+│   ├── Admin/                   # Admin dashboard & management components
+│   │   ├── AdminLayout.jsx      # Admin sidebar & layout wrapper
+│   │   ├── DashBoxes.jsx        # Summary count cards
+│   │   ├── ImageCropper.jsx     # Client-side image cropper modal
+│   │   ├── LineGraph.jsx        # Recharts line graph
+│   │   ├── OrderStatusModal.jsx # Modal to update order item status
+│   │   ├── PiChart.jsx          # Order status pie chart
+│   │   ├── ProductTable.jsx     # Product & variant management table
+│   │   └── SalesLineGraph.jsx   # Revenue & sales chart
+│   ├── Protected/               # Route protection components
+│   │   ├── AdminProtected.jsx   # Protects admin routes
+│   │   ├── AdminSessionCheck.jsx# Redirects logged-in admins away from login page
+│   │   ├── RouteValidation.jsx  # Validates & auto-corrects category URLs
+│   │   ├── UserProtected.jsx    # Protects authenticated user routes
+│   │   └── UserSesssionChech.jsx# Redirects logged-in users away from login page
+│   └── User/                    # Customer storefront components
+│       ├── ChatBox.jsx          # Floating AI chat assistant
+│       ├── Header.jsx           # Main navbar, search bar & cart badge
+│       ├── PaypalButton.jsx     # PayPal button component
+│       ├── ProductCard.jsx      # Product card component
+│       ├── ProductZoom.jsx      # Product image zoom gallery
+│       ├── Razorpay.jsx         # Razorpay payment handler
+│       ├── Search.jsx           # Search input with suggestions
+│       └── SelectCouponModal.jsx# Modal to view & apply coupons
+├── Error/
+│   └── ErrorBoundary.jsx        # React Error Boundary fallback UI
+├── Layout/
+│   └── MyAccountLayout.jsx      # Sidebar layout for user profile, orders & wallet
+├── Pages/
+│   ├── Admin/                   # Admin views (Dashboard, Products, Orders, Offers, Coupons)
+│   └── User/                    # Customer views (Home, ProductListing, Checkout, Orders, Wallet)
+├── Routes/
+│   ├── Admin.route.jsx          # Admin route definitions
+│   └── User.route.jsx           # Customer route definitions
+├── Store/                       # Redux Toolkit & RTK Query setup
+│   ├── Api/
+│   │   ├── admin/               # Admin RTK Query endpoints
+│   │   ├── setup/               # Axios instances & base query setup
+│   │   └── user/                # User RTK Query endpoints
+│   ├── StoreSlices/             # Redux state slices (auth, cart, order, ui)
 │   └── store.js                 # Redux store & redux-persist configuration
-├── Utils/                       # Pure utility functions & canvas crop helpers
-│   ├── getCroppedImg.js         # HTML5 Canvas image crop algorithm
-│   └── ProtectedRoute.jsx       # Route wrapper factory helpers
-├── WebSocket/                   # Real-time WebSocket connection
-│   └── socket.js                # Singleton Socket.io client instance
-├── App.jsx                      # Application shell & socket listener
-├── main.jsx                     # Root bootstrap & provider composition
-└── index.css                    # Tailwind CSS v4 design tokens
+├── Utils/
+│   ├── getCroppedImg.js         # Canvas helper to crop images
+│   └── ProtectedRoute.jsx       # Route guard helper functions
+├── WebSocket/
+│   └── socket.js                # Socket.io client setup
+├── App.jsx                      # Root component (auth check, cart sync & socket listener)
+├── main.jsx                     # App entry point
+└── index.css                    # Global styles & Tailwind CSS v4 setup
 ```
 
 ---
 
-## Route Configuration & Access Control Matrix
+## Main Application Routes
 
-| Path | Component | Guard / Access Level | Description |
+| Path | Component | Access | Description |
 | :--- | :--- | :--- | :--- |
-| `/` | `Home` | Public | Storefront landing page, hero sliders & featured SKUs |
-| `/:category/:sub?/:third?` | `ProductListing` | `RouteValidation` | Catalog with fuzzy match autocorrection |
-| `/search` | `ProductListing` | Public | Full-text catalog search with filter sidebar |
-| `/product/:id` | `ProductDetails` | Public | SKU details, image zoom & variant selection |
-| `/cart` | `Cart` | Public / User | Cart management with live stock verification |
-| `/checkout` | `Checkout` | `UserProtected` | Multi-rail checkout with address & coupon selection |
-| `/checkout/retry/:id` | `CheckoutRetry` | `UserProtected` | Failed order payment recovery pipeline |
-| `/myAccount/*` | `MyAccountLayout` | `UserProtected` | Account profile, address book, wallet, and orders |
-| `/admin/login` | `AdminLogin` | `AdminSessionCheck`| Administrative dashboard login |
-| `/admin` | `Dashboard` | `AdminProtected` | Executive analytics dashboard & reporting |
-| `/admin/products` | `Products` | `AdminProtected` | SKU catalog, pricing & variant management |
-| `/admin/orders` | `AdminOrders` | `AdminProtected` | Line-item order lifecycle & status management |
-| `/admin/orders/return/requests` | `ReturnRequests` | `AdminProtected` | Return request approval & automated wallet refunds |
-
+| `/` | `Home` | Public | Home page with category sliders, banners & product carousels |
+| `/:category/:sub?/:third?` | `ProductListing` | `RouteValidation` | Category product listing with filters, sorting & pagination |
+| `/search` | `ProductListing` | Public | Product search results with sidebar filters |
+| `/product/:id` | `ProductDetails` | Public | Product details, variant selection, reviews & image zoom |
+| `/cart` | `Cart` | Public / User | Shopping cart management |
+| `/checkout` | `Checkout` | `UserProtected` | Checkout page (address, coupons & payment methods) |
+| `/checkout/retry/:id` | `CheckoutRetry` | `UserProtected` | Retry payment for failed orders |
+| `/myAccount`, `/orders`, `/myWallet` | `MyAccountLayout` | `UserProtected` | User profile, addresses, order tracking, returns & wallet |
+| `/admin/login` | `AdminLogin` | `AdminSessionCheck`| Admin login page |
+| `/admin` | `Dashboard` | `AdminProtected` | Admin analytics dashboard & sales reports |
+| `/admin/products` | `Products` | `AdminProtected` | Product & variant management |
+| `/admin/orders` | `AdminOrders` | `AdminProtected` | Order & item status management |
+| `/admin/orders/return/requests` | `ReturnRequests` | `AdminProtected` | Approve/reject customer return requests |
 
 ---
 
-## Local Setup & Production Build
+## Local Development Setup
 
 ```bash
 # 1. Install dependencies
 npm install
 
-# 2. Launch Vite development server with HMR
+# 2. Start Vite development server
 npm run dev
 
-# 3. Compile optimized production build (Tree-shaken ES modules)
+# 3. Build for production
 npm run build
 
 # 4. Preview production build locally
 npm run preview
-
-# 5. Format and Lint source files
-npm run format
-npm run lint
 ```
